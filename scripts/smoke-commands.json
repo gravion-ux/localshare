@@ -1,0 +1,11 @@
+[
+  {
+    "label": "localshare --help",
+    "cwd": ".",
+    "cmd": [
+      "node",
+      "bin/localshare.js",
+      "--help"
+    ]
+  }
+]

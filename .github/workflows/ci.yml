@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fail on committed credentials or secret-bearing files
+        run: python scripts/scan-secrets.py .
+
+  syntax-checks:
+    name: Syntax and manifest checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install PyYAML for manifest validation
+        run: python -m pip install --disable-pip-version-check --quiet "pyyaml>=6,<7"
+      - name: Run static syntax, manifest and CLI smoke checks
+        run: python scripts/syntax-checks.py .
+
+  node-tests:
+    name: Node tests (node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Localshare tests
+        run: npm test
+      - name: Localshare CLI smoke
+        run: npm start -- --help
+      - name: demo-web tests
+        run: npm test
+        working-directory: demo-web
+
+  deployment-checks:
+    name: Deployment configuration checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Compose configuration
+        run: SITE_DOMAIN=demo.example.com docker compose -f deployment/compose.yml config --quiet
+      - name: Validate Caddyfile
+        run: |
+          docker run --rm -e SITE_DOMAIN=demo.example.com \
+            -v "$GITHUB_WORKSPACE/deployment/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build demo container
+        run: docker build -f demo-web/Dockerfile demo-web

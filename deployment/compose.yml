@@ -1,0 +1,39 @@
+services:
+  demo-web:
+    build:
+      context: ../demo-web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      HOST: "0.0.0.0"
+    expose:
+      - "3000"
+    networks:
+      - gravion-internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN to a domain you control}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - demo-web
+    networks:
+      - gravion-internal
+
+networks:
+  gravion-internal:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
