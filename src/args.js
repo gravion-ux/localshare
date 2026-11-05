@@ -1,12 +1,15 @@
 const EMAIL_RE = /^[^\s@*]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_DOMAIN_RE = /^\*@(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 const HOST_RE = /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
 
 export function parseArgs(argv) {
   const result = {
     mode: "quick", port: null, host: "127.0.0.1", allowEmails: [],
     publicMode: false, configPath: null, tunnelName: null, hostname: null, help: false,
   };
+  let hostProvided = false;
+  let portProvided = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -14,6 +17,9 @@ export function parseArgs(argv) {
     const requireValue = (flag) => {
       if (!next || next.startsWith("-")) throw new Error(`${flag} requires a value.`);
       i += 1;
+      // Values are echoed back to the terminal, so control characters (ANSI escapes,
+      // carriage returns) must never reach the output.
+      if (CONTROL_CHARACTERS.test(next)) throw new Error(`${flag} value contains control characters.`);
       return next;
     };
 
@@ -23,8 +29,9 @@ export function parseArgs(argv) {
       const rawPort = requireValue(arg);
       if (!/^\d+$/.test(rawPort)) throw new Error("--port must be a decimal integer.");
       result.port = Number(rawPort);
+      portProvided = true;
     }
-    else if (arg === "--host") result.host = requireValue(arg);
+    else if (arg === "--host") { result.host = requireValue(arg); hostProvided = true; }
     else if (arg === "--allow-email") result.allowEmails.push(...requireValue(arg).split(",").map((v) => v.trim()).filter(Boolean));
     else if (arg === "--public") result.publicMode = true;
     else if (arg === "--config") result.configPath = requireValue(arg);
@@ -58,6 +65,9 @@ export function parseArgs(argv) {
     if (!result.configPath || !result.tunnelName) throw new Error("Named mode requires both --config <path> and --tunnel <name>.");
     if (result.publicMode || result.allowEmails.length > 0) {
       throw new Error("Named tunnel access is configured through Cloudflare Access policies, not --public/--allow-email.");
+    }
+    if (hostProvided || portProvided) {
+      throw new Error("--host and --port are only valid with --mode quick.");
     }
     if (result.hostname && !HOST_RE.test(result.hostname)) throw new Error("--hostname must be a valid DNS hostname such as preview.example.com.");
   }

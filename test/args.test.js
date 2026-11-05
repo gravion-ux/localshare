@@ -35,3 +35,22 @@ test("supports explicit wildcard email-domain allow-lists", () => {
 test("rejects malformed wildcard email domains", () => {
   assert.throws(() => parseArgs(["--port", "3000", "--allow-email", "*@bad_domain"]), /Invalid email/);
 });
+
+// --- named mode must not silently swallow quick-mode origin flags ---
+test("named tunnel rejects --host", () => {
+  assert.throws(() => parseArgs(["--mode", "named", "--config", "x", "--tunnel", "x", "--host", "0.0.0.0"]), /only valid with --mode quick/);
+});
+test("named tunnel rejects --port", () => {
+  assert.throws(() => parseArgs(["--mode", "named", "--config", "x", "--tunnel", "x", "--port", "22"]), /only valid with --mode quick/);
+});
+
+// --- terminal control characters must never reach echoed output ---
+test("rejects control characters in an allow-list email", () => {
+  assert.throws(() => parseArgs(["--port", "3000", "--allow-email", "\u001b[31m@x.com"]), /control characters/);
+});
+test("rejects control characters in a tunnel name", () => {
+  assert.throws(() => parseArgs(["--mode", "named", "--config", "x", "--tunnel", "t\u001b[31m"]), /control characters/);
+});
+test("rejects control characters in a hostname", () => {
+  assert.throws(() => parseArgs(["--mode", "named", "--config", "x", "--tunnel", "x", "--hostname", "a.example.com\u0007"]), /control characters/);
+});

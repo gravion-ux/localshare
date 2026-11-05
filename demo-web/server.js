@@ -19,6 +19,16 @@ export function createServer({ displayAddress = "127.0.0.1:3000" } = {}) {
   });
 }
 
+/** Turn a Node listen error into a single operator-facing line. */
+export function describeListenError(error, { host, port } = {}) {
+  const code = error?.code;
+  if (code === "EADDRINUSE") return `port ${port} is already in use`;
+  if (code === "EADDRNOTAVAIL") return `cannot bind to ${host}:${port}`;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return `cannot resolve host ${host}`;
+  if (code === "EACCES") return `permission denied binding to ${host}:${port}`;
+  return error?.message || "unknown listen error";
+}
+
 export function main() {
   const portRaw = process.env.PORT ?? "3000";
   const port = Number(portRaw);
@@ -27,6 +37,10 @@ export function main() {
     throw new Error("PORT must be a decimal integer between 1 and 65535");
   }
   const server = createServer({ displayAddress: `${host}:${port}` });
+  server.once("error", (error) => {
+    console.error(`demo-web: ${describeListenError(error, { host, port })}`);
+    process.exitCode = 1;
+  });
   server.listen(port, host, () => console.log(`Demo listening at http://${host.includes(":") ? `[${host}]` : host}:${port}`));
   const shutdown = () => server.close(() => process.exit(0));
   process.once("SIGINT", shutdown);

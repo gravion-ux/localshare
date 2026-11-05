@@ -6,13 +6,36 @@ import { constants as fsConstants } from "node:fs";
 import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { parseArgs, helpText, originUrl } from "../src/args.js";
-import { checkLocalPort } from "../src/health.js";
+import { checkLocalHttpOrigin } from "../src/health.js";
 
-function commandExists(command) {
+/**
+ * Probe for the cloudflared binary. A missing binary and a broken binary are
+ * different problems with different fixes, so they are reported differently.
+ */
+export function inspectCommand(command) {
   const result = spawnSync(command, ["--version"], {
-    stdio: "ignore", windowsHide: true, timeout: 5000,
+    stdio: ["ignore", "ignore", "pipe"], windowsHide: true, timeout: 5000, encoding: "utf8",
   });
-  return !result.error && result.status === 0;
+  if (result.error) {
+    if (result.error.code === "ENOENT") return { status: "missing" };
+    if (result.error.code === "ETIMEDOUT") return { status: "timeout", detail: "the --version check timed out" };
+    return { status: "error", detail: result.error.message };
+  }
+  if (result.status !== 0) {
+    const firstLine = String(result.stderr || "").trim().split("\n")[0];
+    return { status: "failed", detail: `exit code ${result.status}${firstLine ? ` (${firstLine})` : ""}` };
+  }
+  return { status: "ok" };
+}
+
+/**
+ * Map the tunnel process outcome onto a CLI exit status. A stop the operator asked
+ * for (Ctrl+C) is a successful session, not a failure.
+ */
+export function resolveExitCode(code, signal, { spawnError = null, stoppedByUser = false } = {}) {
+  if (spawnError) return 1;
+  if (stoppedByUser) return 0;
+  return code ?? (signal ? 1 : 0);
 }
 
 async function confirmPublicExposure() {
@@ -30,6 +53,7 @@ function attachTunnel(child, options) {
   let printedUrl = false;
   let spawnError = null;
   let shuttingDown = false;
+  let stoppedByUser = false;
   const handleOutput = (chunk) => {
     const output = chunk.toString();
     const matches = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/g);
@@ -47,6 +71,7 @@ function attachTunnel(child, options) {
   const stop = (signal) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stoppedByUser = true;
     if (!child.killed) child.kill(signal);
   };
   const onSigint = () => stop("SIGINT");
@@ -59,7 +84,7 @@ function attachTunnel(child, options) {
       process.off("SIGINT", onSigint);
       process.off("SIGTERM", onSigterm);
       stdout.write("\n  Localshare session ended.\n");
-      resolve(spawnError ? 1 : (code ?? (signal ? 1 : 0)));
+      resolve(resolveExitCode(code, signal, { spawnError, stoppedByUser }));
     });
   });
 }
@@ -68,14 +93,18 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     const options = parseArgs(argv);
     if (options.help) { stdout.write(helpText()); return 0; }
-    if (!commandExists("cloudflared")) {
-      throw new Error("cloudflared was not found on PATH. Install it: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/");
+    const cloudflared = inspectCommand("cloudflared");
+    if (cloudflared.status !== "ok") {
+      if (cloudflared.status === "missing") {
+        throw new Error("cloudflared was not found on PATH. Install it: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/");
+      }
+      throw new Error(`cloudflared is installed but could not run (${cloudflared.detail}). Reinstall or repair the cloudflared binary on PATH.`);
     }
 
     let commandArgs;
     if (options.mode === "quick") {
-      if (!(await checkLocalPort(options.host, options.port))) {
-        throw new Error(`Nothing is listening at http://${options.host}:${options.port}. Start your local project first.`);
+      if (!(await checkLocalHttpOrigin(options.host, options.port))) {
+        throw new Error(`No HTTP origin is listening at http://${options.host}:${options.port}. Start your local HTTP app first.`);
       }
       if (options.publicMode) await confirmPublicExposure();
       commandArgs = ["tunnel", "--url", originUrl(options.host, options.port)];

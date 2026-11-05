@@ -6,11 +6,11 @@ import { delimiter, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import net from "node:net";
+import http from "node:http";
 
  test("CLI launches cloudflared with protected Quick Tunnel arguments", { skip: process.platform === "win32" }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "localshare-test-"));
-  const server = net.createServer();
+  const server = http.createServer((_req, res) => { res.writeHead(200); res.end("ok"); });
   await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", (error) => error ? reject(error) : resolve()));
   const port = server.address().port;
   const capturePath = join(directory, "args.json");
