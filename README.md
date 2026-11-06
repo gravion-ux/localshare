@@ -17,6 +17,8 @@ npm start -- --port 3000 --allow-email teammate@example.com
 
 The recipient completes Cloudflare's email one-time-PIN flow. Multiple email addresses can be comma-separated or repeated. You may also explicitly allow a whole email domain with `--allow-email '*@example.com'`; that grants access to every matching address on the domain.
 
+Options that take a value accept both spellings: `--port 3000` and `--port=3000` are equivalent. A value that starts with `--` is still refused, so a value can never be mistaken for another option.
+
 Public link (interactive confirmation required):
 
 ```bash
@@ -58,7 +60,7 @@ This repository holds one project from the four-project Gravion Toolkit. The pro
 | Project | Purpose | Repository |
 |---|---|---|
 | **This repository** | Share a local development server through Cloudflare Quick or Named Tunnels | https://github.com/gravion-ux/localshare/tree/main |
-| privacyflow | Validate authorised VPN profiles and plan safe rotation workflows | https://github.com/gravion-ux/privacyflow/tree/main |
+| privacyflow | Validate authorized VPN profiles and plan safe rotation workflows | https://github.com/gravion-ux/privacyflow/tree/main |
 | agent-browser | Run permission-aware browser tasks on allow-listed domains | https://github.com/gravion-ux/agent-browser/tree/main |
 | gravion-trainner | Evaluate AI models against a JSONL dataset and report quality | https://github.com/gravion-ux/gravion-trainner/tree/main |
 

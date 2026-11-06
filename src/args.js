@@ -2,6 +2,32 @@ const EMAIL_RE = /^[^\s@*]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_DOMAIN_RE = /^\*@(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 const HOST_RE = /^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
 const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
+// Options that take a value. Only these may use the --flag=value form.
+const VALUE_OPTIONS = new Set([
+  "--mode", "--port", "-p", "--host", "--allow-email", "--config", "--tunnel", "--hostname",
+]);
+
+/**
+ * Rewrite the --flag=value form into the --flag value form, so both spellings
+ * reach the same parser. An option that takes no value cannot be written with
+ * an inline value, and an empty inline value is a missing value.
+ */
+export function expandInlineValues(argv) {
+  const expanded = [];
+  for (const arg of argv) {
+    if (!arg.startsWith("--") || !arg.includes("=")) {
+      expanded.push(arg);
+      continue;
+    }
+    const separator = arg.indexOf("=");
+    const flag = arg.slice(0, separator);
+    const value = arg.slice(separator + 1);
+    if (!VALUE_OPTIONS.has(flag)) throw new Error(`Option ${flag} does not take a value.`);
+    if (value === "") throw new Error(`${flag} requires a value.`);
+    expanded.push(flag, value);
+  }
+  return expanded;
+}
 
 export function parseArgs(argv) {
   const result = {
@@ -10,10 +36,11 @@ export function parseArgs(argv) {
   };
   let hostProvided = false;
   let portProvided = false;
+  const args = expandInlineValues(argv);
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
     const requireValue = (flag) => {
       if (!next || next.startsWith("-")) throw new Error(`${flag} requires a value.`);
       i += 1;
@@ -75,7 +102,7 @@ export function parseArgs(argv) {
 }
 
 export function helpText() {
-  return `Localshare v0.4.3\n\nQuick temporary link:\n  localshare --port 3000 --allow-email teammate@example.com\n  localshare --port 3000 --public\n\nStable named tunnel:\n  localshare --mode named --config ~/.cloudflared/config.yml --tunnel localshare-preview --hostname preview.example.com\n\nOptions:\n  -p, --port <port>       Local service port (quick mode)\n      --host <host>       Loopback origin only; default 127.0.0.1\n      --allow-email <...> Quick Tunnel email PIN allow-list; supports *@domain.com\n      --public             Public Quick Tunnel; requires typing EXPOSE\n      --mode <quick|named> Tunnel mode; default quick\n      --config <path>      Named tunnel cloudflared config file\n      --tunnel <name>      Named tunnel name (named mode)\n      --hostname <host>    Display hostname configured in ingress (named mode)\n  -h, --help              Show this help\n\nStop with Ctrl+C. Named tunnel DNS and Access policies must be configured in Cloudflare first.\n`;
+  return `Localshare v0.4.3\n\nQuick temporary link:\n  localshare --port 3000 --allow-email teammate@example.com\n  localshare --port 3000 --public\n\nStable named tunnel:\n  localshare --mode named --config ~/.cloudflared/config.yml --tunnel localshare-preview --hostname preview.example.com\n\nOptions:\n  -p, --port <port>       Local service port (quick mode)\n      --host <host>       Loopback origin only; default 127.0.0.1\n      --allow-email <...> Quick Tunnel email PIN allow-list; supports *@domain.com\n      --public             Public Quick Tunnel; requires typing EXPOSE\n      --mode <quick|named> Tunnel mode; default quick\n      --config <path>      Named tunnel cloudflared config file\n      --tunnel <name>      Named tunnel name (named mode)\n      --hostname <host>    Display hostname configured in ingress (named mode)\n  -h, --help              Show this help\n\nOptions also accept the --flag=value form, for example --port=3000.\n\nStop with Ctrl+C. Named tunnel DNS and Access policies must be configured in Cloudflare first.\n`;
 }
 
 export function originUrl(host, port) {

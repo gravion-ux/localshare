@@ -54,3 +54,29 @@ test("rejects control characters in a tunnel name", () => {
 test("rejects control characters in a hostname", () => {
   assert.throws(() => parseArgs(["--mode", "named", "--config", "x", "--tunnel", "x", "--hostname", "a.example.com\u0007"]), /control characters/);
 });
+
+// --- the --flag=value form must reach the same parser ---
+test("accepts the --flag=value form", () => {
+  const result = parseArgs(["--port=3000", "--allow-email=a@example.com"]);
+  assert.equal(result.port, 3000);
+  assert.deepEqual(result.allowEmails, ["a@example.com"]);
+});
+test("accepts the --flag=value form for a named tunnel", () => {
+  const result = parseArgs(["--mode=named", "--config=/tmp/config.yml", "--tunnel=preview"]);
+  assert.equal(result.mode, "named");
+  assert.equal(result.configPath, "/tmp/config.yml");
+  assert.equal(result.tunnelName, "preview");
+});
+test("rejects an inline value on an option that takes none", () => {
+  assert.throws(() => parseArgs(["--port=3000", "--public=true"]), /does not take a value/);
+});
+test("rejects an empty inline value", () => {
+  assert.throws(() => parseArgs(["--port="]), /requires a value/);
+});
+test("rejects control characters in an inline value", () => {
+  assert.throws(() => parseArgs(["--allow-email=\u001b[31m@x.com"]), /control characters/);
+});
+test("the inline form is validated like the spaced form", () => {
+  assert.throws(() => parseArgs(["--port=70000", "--public"]), /valid TCP port/);
+  assert.throws(() => parseArgs(["--port=3000", "--host=0.0.0.0", "--public"]), /loopback hosts/);
+});
