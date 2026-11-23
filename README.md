@@ -1,5 +1,7 @@
 # Localshare v0.4.3
 
+[![CI](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml/badge.svg)](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml)
+
 CLI to share a local development service via Cloudflare Quick Tunnel, or run a preconfigured Named Tunnel with a stable hostname.
 
 ## Requirements
