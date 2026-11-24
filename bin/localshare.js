@@ -7,6 +7,7 @@ import { stdin, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { parseArgs, helpText, originUrl } from "../src/args.js";
 import { checkLocalHttpOrigin } from "../src/health.js";
+import { backoffDelayMs, shouldRestart, countFailure, MAX_RECONNECT_ATTEMPTS } from "../src/reconnect.js";
 
 /**
  * Probe for the cloudflared binary. A missing binary and a broken binary are
@@ -49,17 +50,18 @@ async function confirmPublicExposure() {
   } finally { rl.close(); }
 }
 
-function attachTunnel(child, options) {
-  let printedUrl = false;
+/**
+ * Run one cloudflared process until it exits. Output is passed through, except
+ * that a trycloudflare hostname is reported via onUrl instead of being echoed
+ * raw, so the supervisor can present the current share link (and flag changes).
+ */
+function waitForTunnelRun(child, onUrl) {
   let spawnError = null;
-  let shuttingDown = false;
-  let stoppedByUser = false;
   const handleOutput = (chunk) => {
     const output = chunk.toString();
     const matches = output.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/g);
-    if (matches && !printedUrl) {
-      printedUrl = true;
-      stdout.write(`\n  SHARE URL: ${matches[0]}\n  Powered by Localshare • graviondev\n\n`);
+    if (matches) {
+      onUrl(matches[0]);
       return;
     }
     stdout.write(output);
@@ -68,25 +70,113 @@ function attachTunnel(child, options) {
   child.stderr?.on("data", handleOutput);
   child.once("error", (error) => { spawnError = error; process.stderr.write(`Failed to start cloudflared: ${error.message}\n`); });
 
+  return new Promise((resolve) => {
+    child.once("close", (code, signal) => resolve({ code, signal, spawnError }));
+  });
+}
+
+/**
+ * While a Quick Tunnel is up, keep an eye on the local app itself. The tunnel
+ * can be perfectly healthy while the app behind it has died; say so clearly
+ * instead of leaving visitors (and the operator) guessing.
+ */
+function watchOrigin(options, isStopped) {
+  let wasUp = true;
+  let checking = false;
+  const timer = setInterval(async () => {
+    if (checking || isStopped()) return;
+    checking = true;
+    try {
+      const up = await checkLocalHttpOrigin(options.host, options.port);
+      if (!up && wasUp) {
+        stdout.write(`\n  Warning: your local app at ${originUrl(options.host, options.port)} stopped responding. The tunnel is still up, but visitors will see an error until the app is back.\n`);
+      } else if (up && !wasUp) {
+        stdout.write(`\n  Your local app at ${originUrl(options.host, options.port)} is responding again.\n`);
+      }
+      wasUp = up;
+    } finally { checking = false; }
+  }, 15000);
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+/**
+ * Supervise the tunnel process for one Localshare session.
+ *
+ * Quick Tunnel mode: if cloudflared drops unexpectedly, restart it with
+ * backoff and print the new share link (the old hostname dies with the old
+ * process). Give up after MAX_RECONNECT_ATTEMPTS consecutive failures, or
+ * immediately if the local app itself is gone — reconnecting a tunnel to a
+ * dead app helps nobody. A user-requested stop (Ctrl+C/SIGTERM) kills the
+ * current child, interrupts any backoff wait, and never triggers a restart.
+ *
+ * Named Tunnel mode keeps the original behaviour: one run, no restarts.
+ */
+async function superviseTunnel(commandArgs, options) {
+  const restartable = options.mode === "quick";
+  let child = null;
+  let stoppedByUser = false;
+  let wakeUp = null;
+
   const stop = (signal) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
+    if (stoppedByUser) return;
     stoppedByUser = true;
-    if (!child.killed) child.kill(signal);
+    if (child && !child.killed) child.kill(signal);
+    if (wakeUp) wakeUp();
   };
   const onSigint = () => stop("SIGINT");
   const onSigterm = () => stop("SIGTERM");
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  return new Promise((resolve) => {
-    child.once("close", (code, signal) => {
-      process.off("SIGINT", onSigint);
-      process.off("SIGTERM", onSigterm);
-      stdout.write("\n  Localshare session ended.\n");
-      resolve(resolveExitCode(code, signal, { spawnError, stoppedByUser }));
-    });
+  const interruptibleSleep = (ms) => new Promise((resolve) => {
+    const timer = setTimeout(() => { wakeUp = null; resolve(); }, ms);
+    wakeUp = () => { clearTimeout(timer); wakeUp = null; resolve(); };
   });
+
+  let lastUrl = null;
+  const announceUrl = (url) => {
+    if (url === lastUrl) return;
+    if (lastUrl === null) {
+      stdout.write(`\n  SHARE URL: ${url}\n  Powered by Localshare • graviondev\n\n`);
+    } else {
+      stdout.write(`\n  Your share link changed to: ${url}\n  (the previous link no longer works)\n\n`);
+    }
+    lastUrl = url;
+  };
+
+  let consecutiveFailures = 0;
+  try {
+    for (;;) {
+      const startedAt = Date.now();
+      child = spawn("cloudflared", commandArgs, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+      const stopWatching = restartable ? watchOrigin(options, () => stoppedByUser) : null;
+      const { code, signal, spawnError } = await waitForTunnelRun(child, announceUrl);
+      stopWatching?.();
+      child = null;
+
+      const exitCode = resolveExitCode(code, signal, { spawnError, stoppedByUser });
+      if (stoppedByUser || spawnError || !restartable) return exitCode;
+
+      consecutiveFailures = countFailure(consecutiveFailures, Date.now() - startedAt);
+      if (!shouldRestart({ consecutiveFailures })) {
+        stdout.write(`\n  The tunnel dropped ${consecutiveFailures} times in a row and could not be kept up. Check your network connection, then run Localshare again.\n`);
+        return exitCode !== 0 ? exitCode : 1;
+      }
+      if (!(await checkLocalHttpOrigin(options.host, options.port))) {
+        stdout.write(`\n  Your local app at ${originUrl(options.host, options.port)} is not responding, so the share cannot be restored. Restart your app, then run Localshare again.\n`);
+        return 1;
+      }
+      const delayMs = backoffDelayMs(consecutiveFailures);
+      stdout.write(`\n  Tunnel connection lost. Reconnecting in ${delayMs / 1000}s (attempt ${consecutiveFailures} of ${MAX_RECONNECT_ATTEMPTS})...\n`);
+      await interruptibleSleep(delayMs);
+      if (stoppedByUser) return 0;
+    }
+  } finally {
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+    stdout.write("\n  Localshare session ended.\n");
+  }
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -125,8 +215,7 @@ export async function main(argv = process.argv.slice(2)) {
       stdout.write("  Starting persistent tunnel connector. Keep this process running.\n\n");
     }
 
-    const child = spawn("cloudflared", commandArgs, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    return await attachTunnel(child, options);
+    return await superviseTunnel(commandArgs, options);
   } catch (error) {
     process.stderr.write(`\nLocalshare: ${error.message}\n\nRun with --help for usage.\n`);
     return 1;

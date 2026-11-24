@@ -29,6 +29,8 @@ npm start -- --port 3000 --public
 
 Anyone with the URL may access the app in public mode. The process and your computer must stay online; the random URL expires when the tunnel stops.
 
+If the tunnel connection drops, Localshare reconnects automatically: it restarts the tunnel with a short backoff (1s, 2s, 5s, 10s, then 30s) and prints the new link prominently as `Your share link changed to: ...` — the old link stops working, so share the new one. After 10 failed attempts in a row it gives up with a clear message. A tunnel run that stayed up for a while resets the attempt counter, so an occasional drop does not eat the budget. Ctrl+C still stops the session cleanly and never triggers a reconnect. If your local app itself stops responding, Localshare says so (while the tunnel is up, and before reconnecting) instead of silently restarting a tunnel to a dead app.
+
 ## Mode 2 — stable named tunnel
 
 Create a Cloudflare named tunnel, set up DNS, configure an ingress rule in `~/.cloudflared/config.yml`, and create a Cloudflare Access self-hosted application/policy. Then:
@@ -51,7 +53,7 @@ See the repo-level [Localshare deployment guide](docs/SHARE-DEPLOYMENT.md) and r
 - Loopback origins only in Quick Tunnel mode.
 - Email-restricted access is preferred for private previews.
 - Never expose database ports, Docker socket, SSH, admin consoles, secrets or production credentials.
-- Quick Tunnels are for development/testing; they have no uptime guarantee, their hostname changes every time, and have documented SSE/concurrency limitations.
+- Quick Tunnels are for development/testing; they have no uptime guarantee, their hostname changes every time (Localshare reconnects automatically and prints the new hostname), and have documented SSE/concurrency limitations.
 
 ---
 
