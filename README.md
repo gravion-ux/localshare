@@ -1,8 +1,10 @@
+<p align="center"><img src="assets/banner.svg" alt="localshare banner" width="100%"/></p>
+
 # Localshare v0.4.3
 
-[![CI](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml/badge.svg)](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml)
+[![CI](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml/badge.svg)](https://github.com/gravion-ux/localshare/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-CLI to share a local development service via Cloudflare Quick Tunnel, or run a preconfigured Named Tunnel with a stable hostname.
+**CLI to share a local development service via Cloudflare Quick Tunnel, or run a preconfigured Named Tunnel with a stable hostname.**
 
 ## Requirements
 
