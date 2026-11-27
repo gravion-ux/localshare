@@ -10,16 +10,24 @@ import { checkLocalHttpOrigin } from "../src/health.js";
 import { backoffDelayMs, shouldRestart, countFailure, MAX_RECONNECT_ATTEMPTS } from "../src/reconnect.js";
 
 /**
- * Probe for the cloudflared binary. A missing binary and a broken binary are
- * different problems with different fixes, so they are reported differently.
+ * How long the --version probe may take before it is reported as a timeout.
+ * A cold start of a large binary on a busy machine is slow but not broken, so
+ * the budget is generous and a timeout is reported as its own status.
  */
-export function inspectCommand(command) {
+export const PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Probe for the cloudflared binary. A missing binary, a binary that is slow
+ * to start and a broken binary are different problems with different fixes,
+ * so they are reported differently.
+ */
+export function inspectCommand(command, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
   const result = spawnSync(command, ["--version"], {
-    stdio: ["ignore", "ignore", "pipe"], windowsHide: true, timeout: 5000, encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"], windowsHide: true, timeout: timeoutMs, encoding: "utf8",
   });
   if (result.error) {
     if (result.error.code === "ENOENT") return { status: "missing" };
-    if (result.error.code === "ETIMEDOUT") return { status: "timeout", detail: "the --version check timed out" };
+    if (result.error.code === "ETIMEDOUT") return { status: "timeout", detail: `the --version check timed out after ${timeoutMs} ms` };
     return { status: "error", detail: result.error.message };
   }
   if (result.status !== 0) {
@@ -179,14 +187,25 @@ async function superviseTunnel(commandArgs, options) {
   }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), { probe = inspectCommand } = {}) {
   try {
     const options = parseArgs(argv);
     if (options.help) { stdout.write(helpText()); return 0; }
-    const cloudflared = inspectCommand("cloudflared");
+    let cloudflared = probe("cloudflared");
+    if (cloudflared.status === "timeout") {
+      // A timeout can be a slow cold start rather than a broken binary, so
+      // the probe is retried once before it is reported.
+      cloudflared = probe("cloudflared");
+    }
     if (cloudflared.status !== "ok") {
       if (cloudflared.status === "missing") {
         throw new Error("cloudflared was not found on PATH. Install it: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/");
+      }
+      if (cloudflared.status === "timeout") {
+        throw new Error(`cloudflared is installed but ${cloudflared.detail}. The binary may be healthy and simply slow to start on this machine; retry, and if it keeps timing out check that antivirus software is not blocking it.`);
+      }
+      if (cloudflared.status === "error") {
+        throw new Error(`cloudflared could not be started (${cloudflared.detail}). Check that the file on PATH is readable and executable by this account.`);
       }
       throw new Error(`cloudflared is installed but could not run (${cloudflared.detail}). Reinstall or repair the cloudflared binary on PATH.`);
     }

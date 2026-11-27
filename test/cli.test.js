@@ -4,6 +4,7 @@ import net from "node:net";
 import { mkdtemp, rm, link, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { resolveExitCode, inspectCommand, main } from "../bin/localshare.js";
 
 // --- a user-requested stop is not a failure ---
@@ -46,6 +47,61 @@ test("reports a broken binary as failed, not missing", () => {
   }
 });
 
+// --- a probe that runs past its budget is a timeout, not a working binary ---
+test("reports a probe that runs past its budget as a timeout", () => {
+  // node --version needs far more than 1 ms to start, so the budget is spent.
+  const report = inspectCommand(process.execPath, { timeoutMs: 1 });
+  assert.equal(report.status, "timeout");
+});
+
+// --- a timeout is not a broken binary, and the advice must say so -----------
+async function captureStderr(run) {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  let stderr = "";
+  process.stderr.write = (chunk, ...rest) => { stderr += String(chunk); return true; };
+  try {
+    await run();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+  return stderr;
+}
+
+test("a timed-out probe is reported as a timeout, not as a broken binary", async () => {
+  const stderr = await captureStderr(() => main(["--port", "3000", "--allow-email", "friend@example.com"], {
+    probe: () => ({ status: "timeout", detail: "the --version check timed out" }),
+  }));
+  assert.match(stderr, /timed out/i);
+  assert.doesNotMatch(stderr, /Reinstall or repair/i);
+});
+
+test("a probe that times out once is retried before the CLI gives up", async () => {
+  let calls = 0;
+  const stderr = await captureStderr(() => main(["--port", "3000", "--allow-email", "friend@example.com"], {
+    probe: () => {
+      calls += 1;
+      return calls === 1
+        ? { status: "timeout", detail: "the --version check timed out after 5000 ms" }
+        : { status: "ok" };
+    },
+  }));
+  assert.equal(calls, 2);
+  assert.doesNotMatch(stderr, /timed out/i);
+});
+
+test("a probe that keeps timing out is reported as a timeout", async () => {
+  let calls = 0;
+  const stderr = await captureStderr(() => main(["--port", "3000", "--allow-email", "friend@example.com"], {
+    probe: () => {
+      calls += 1;
+      return { status: "timeout", detail: "the --version check timed out after 5000 ms" };
+    },
+  }));
+  assert.equal(calls, 2);
+  assert.match(stderr, /timed out/i);
+  assert.doesNotMatch(stderr, /Reinstall or repair/i);
+});
+
 // --- a non-HTTP listener must never be published through a public tunnel ---
 async function withFakeCloudflaredOnPath(run) {
   const directory = await mkdtemp(join(tmpdir(), "localshare-cmd-"));
@@ -55,6 +111,12 @@ async function withFakeCloudflaredOnPath(run) {
   } catch {
     await copyFile(process.execPath, target);
   }
+  // Warm the freshly written binary.  A hard link is not permitted on this
+  // platform, so the fallback copies an 87 MB node.exe; the FIRST spawn of
+  // that copy pays the page-in and antivirus cost (measured 0.9-2.9 s under
+  // load), which can outlast the CLI's probe budget and turn a healthy binary
+  // into a spurious timeout.  Warming it keeps the probe deterministic.
+  spawnSync(target, ["--version"], { stdio: "ignore", timeout: 60000, windowsHide: true });
   const savedPath = process.env.PATH;
   process.env.PATH = `${directory}${delimiter}${savedPath || ""}`;
   try {
