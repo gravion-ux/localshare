@@ -106,6 +106,9 @@ export function helpText() {
 }
 
 export function originUrl(host, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error("port must be an integer between 1 and 65535.");
+  }
   const normalizedHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return `http://${normalizedHost}:${port}`;
 }
